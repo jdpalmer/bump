@@ -4,22 +4,25 @@ set -euo pipefail
 
 usage() {
 	cat <<'EOF'
-Usage: bump.sh [--dry-run] <project> [version]
+Usage: bump.sh [--dry-run] <project|.|path> [version]
 
-  bump.sh transmute           # next YY.MM.R for this month
+  bump.sh transmute           # $BUMP_SRC/transmute
+  bump.sh .                   # current repo
   bump.sh jem 26.11.1         # explicit version
-  bump.sh --dry-run modc      # print actions only
+  bump.sh --dry-run modc
 
-Projects: transmute, modc, jem, perfectfocus
+Convention: repo root has VERSION; formula is jdpalmer/tap/<basename>.
+If src/cli.h defines MODC_VERSION, it is updated to match.
 
 Environment:
-  BUMP_SRC   Parent directory of project checkouts (default: parent of this repo)
+  BUMP_SRC   Parent of named checkouts (default: parent of this repo)
+  BUMP_TAP   Homebrew tap (default: jdpalmer/tap)
 EOF
 	exit 2
 }
 
 DRY_RUN=0
-PROJECT=""
+TARGET=""
 VERSION_ARG=""
 
 while [[ $# -gt 0 ]]; do
@@ -31,8 +34,8 @@ while [[ $# -gt 0 ]]; do
 			usage
 			;;
 		*)
-			if [[ -z "$PROJECT" ]]; then
-				PROJECT=$1
+			if [[ -z "$TARGET" ]]; then
+				TARGET=$1
 			elif [[ -z "$VERSION_ARG" ]]; then
 				VERSION_ARG=$1
 			else
@@ -43,11 +46,11 @@ while [[ $# -gt 0 ]]; do
 	esac
 done
 
-[[ -n "$PROJECT" ]] || usage
+[[ -n "$TARGET" ]] || usage
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 BUMP_SRC=${BUMP_SRC:-$(cd "$SCRIPT_DIR/.." && pwd)}
-CONF=$SCRIPT_DIR/projects.conf
+BUMP_TAP=${BUMP_TAP:-jdpalmer/tap}
 
 need() {
 	command -v "$1" >/dev/null 2>&1 || {
@@ -70,37 +73,55 @@ run() {
 	fi
 }
 
-# Load project row from projects.conf
-NAME="" DIR="" BRANCH="" FORMULA="" CLI_H=""
-while IFS='|' read -r n d b f c || [[ -n "${n:-}" ]]; do
-	[[ -z "${n:-}" || "$n" =~ ^# ]] && continue
-	if [[ "$n" == "$PROJECT" ]]; then
-		NAME=$n
-		DIR=$d
-		BRANCH=$b
-		FORMULA=$f
-		CLI_H=${c:-}
-		break
-	fi
-done <"$CONF"
-
-if [[ -z "$NAME" ]]; then
-	echo "error: unknown project '$PROJECT' (not in projects.conf)" >&2
-	exit 1
+# Resolve repo path: absolute/relative path, ".", or sibling name under BUMP_SRC
+if [[ "$TARGET" == "." ]]; then
+	REPO=$(pwd)
+elif [[ "$TARGET" == /* || "$TARGET" == ../* || "$TARGET" == ./* ]]; then
+	REPO=$(cd "$TARGET" && pwd)
+elif [[ -d "$TARGET/.git" ]]; then
+	REPO=$(cd "$TARGET" && pwd)
+else
+	REPO=$BUMP_SRC/$TARGET
 fi
 
-REPO=$BUMP_SRC/$DIR
 if [[ ! -d "$REPO/.git" ]]; then
-	echo "error: project checkout not found: $REPO" >&2
+	echo "error: git repo not found: $REPO" >&2
 	exit 1
 fi
+
+NAME=$(basename "$REPO")
+FORMULA=$NAME
+CLI_H=""
+if [[ -f "$REPO/src/cli.h" ]] && grep -q '^#define MODC_VERSION ' "$REPO/src/cli.h"; then
+	CLI_H=src/cli.h
+fi
+
+default_branch() {
+	local ref
+	ref=$(git -C "$REPO" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)
+	if [[ -n "$ref" ]]; then
+		echo "${ref##*/}"
+		return
+	fi
+	# Fallback if origin/HEAD is unset
+	if git -C "$REPO" show-ref --verify --quiet refs/remotes/origin/main; then
+		echo main
+	elif git -C "$REPO" show-ref --verify --quiet refs/remotes/origin/master; then
+		echo master
+	else
+		echo "error: cannot determine default branch for $REPO" >&2
+		exit 1
+	fi
+}
+
+BRANCH=$(default_branch)
 
 is_yymm_r() {
 	[[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
 next_version() {
-	local yy mm prefix latest r
+	local yy mm prefix latest r file_ver
 	yy=$(date +%y)
 	mm=$(date +%m)
 	mm=$((10#$mm))
@@ -113,7 +134,6 @@ next_version() {
 			| tail -1 || true
 	)
 	if [[ -z "$latest" && -f "$REPO/VERSION" ]]; then
-		local file_ver
 		file_ver=$(tr -d '[:space:]' <"$REPO/VERSION")
 		if is_yymm_r "$file_ver" && [[ "$file_ver" == "$prefix"* ]]; then
 			latest=$file_ver
@@ -138,10 +158,9 @@ else
 	VER=$(next_version)
 fi
 
-echo "==> $NAME → $VER (formula jdpalmer/tap/$FORMULA)"
+echo "==> $NAME → $VER (formula $BUMP_TAP/$FORMULA)"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry-run)"
 
-# Preconditions
 cd "$REPO"
 cur_branch=$(git rev-parse --abbrev-ref HEAD)
 if [[ "$cur_branch" != "$BRANCH" ]]; then
@@ -153,8 +172,6 @@ if [[ $DRY_RUN -eq 0 ]]; then
 		echo "error: working tree is dirty; commit or stash first" >&2
 		exit 1
 	fi
-	# Untracked VERSION is ok only before first add; any other untracked is fine for status check
-	# of tracked dirtiness above. Refuse if VERSION already differs uncommitted — covered by diff.
 fi
 if git rev-parse "$VER" >/dev/null 2>&1; then
 	echo "error: tag '$VER' already exists" >&2
@@ -166,11 +183,6 @@ run git pull --ff-only
 write_version_files() {
 	printf '%s\n' "$VER" >VERSION
 	if [[ -n "$CLI_H" ]]; then
-		if [[ ! -f "$CLI_H" ]]; then
-			echo "error: missing $CLI_H" >&2
-			exit 1
-		fi
-		# Update #define MODC_VERSION "…"
 		tmp=$(mktemp)
 		sed -E "s/^(#define MODC_VERSION )\"[^\"]*\"/\1\"$VER\"/" "$CLI_H" >"$tmp"
 		mv "$tmp" "$CLI_H"
@@ -192,7 +204,7 @@ run git push origin HEAD "$VER"
 
 if [[ $DRY_RUN -eq 1 ]]; then
 	echo "+ gh release create $VER --title $VER --generate-notes"
-	echo "+ brew bump-formula-pr --no-browse --no-fork --version=$VER jdpalmer/tap/$FORMULA"
+	echo "+ brew bump-formula-pr --no-browse --no-fork --version=$VER $BUMP_TAP/$FORMULA"
 	echo "+ gh pr merge --merge <tap-pr>"
 	echo "==> dry-run complete for $NAME $VER"
 	exit 0
@@ -200,8 +212,8 @@ fi
 
 gh release create "$VER" --title "$VER" --generate-notes
 
-echo "==> updating jdpalmer/tap/$FORMULA"
-pr_out=$(brew bump-formula-pr --no-browse --no-fork --version="$VER" "jdpalmer/tap/$FORMULA" 2>&1) || {
+echo "==> updating $BUMP_TAP/$FORMULA"
+pr_out=$(brew bump-formula-pr --no-browse --no-fork --version="$VER" "$BUMP_TAP/$FORMULA" 2>&1) || {
 	echo "$pr_out" >&2
 	echo "error: brew bump-formula-pr failed" >&2
 	exit 1
