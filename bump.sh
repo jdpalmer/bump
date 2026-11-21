@@ -12,7 +12,7 @@ Usage: bump.sh [--dry-run] <project|.|path> [version]
   bump.sh --dry-run modc
 
 Convention: repo root has VERSION; formula is jdpalmer/tap/<basename>.
-If src/cli.h defines MODC_VERSION, it is updated to match.
+Projects embed VERSION themselves (Make/#embed); bump only writes the file.
 
 Environment:
   BUMP_SRC   Parent of named checkouts (default: parent of this repo)
@@ -91,10 +91,6 @@ fi
 
 NAME=$(basename "$REPO")
 FORMULA=$NAME
-CLI_H=""
-if [[ -f "$REPO/src/cli.h" ]] && grep -q '^#define MODC_VERSION ' "$REPO/src/cli.h"; then
-	CLI_H=src/cli.h
-fi
 
 default_branch() {
 	local ref
@@ -103,7 +99,6 @@ default_branch() {
 		echo "${ref##*/}"
 		return
 	fi
-	# Fallback if origin/HEAD is unset
 	if git -C "$REPO" show-ref --verify --quiet refs/remotes/origin/main; then
 		echo main
 	elif git -C "$REPO" show-ref --verify --quiet refs/remotes/origin/master; then
@@ -180,24 +175,13 @@ fi
 
 run git pull --ff-only
 
-write_version_files() {
-	printf '%s\n' "$VER" >VERSION
-	if [[ -n "$CLI_H" ]]; then
-		tmp=$(mktemp)
-		sed -E "s/^(#define MODC_VERSION )\"[^\"]*\"/\1\"$VER\"/" "$CLI_H" >"$tmp"
-		mv "$tmp" "$CLI_H"
-	fi
-}
-
 if [[ $DRY_RUN -eq 1 ]]; then
 	echo "+ write VERSION → $VER"
-	[[ -n "$CLI_H" ]] && echo "+ patch $CLI_H MODC_VERSION → $VER"
 else
-	write_version_files
+	printf '%s\n' "$VER" >VERSION
 fi
 
 run git add VERSION
-[[ -n "$CLI_H" ]] && run git add "$CLI_H"
 run git commit -m "Bump version to $VER"
 run git tag -a "$VER" -m "$VER"
 run git push origin HEAD "$VER"

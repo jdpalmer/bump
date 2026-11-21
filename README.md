@@ -24,7 +24,7 @@ No project registry. For a repo to be bumpable:
 
 1. Root `VERSION` file (written/updated by this tool)
 2. Homebrew formula named like the directory: `jdpalmer/tap/<basename>`
-3. Optional: if `src/cli.h` defines `MODC_VERSION`, it is kept in sync
+3. Projects embed `VERSION` themselves (`#embed`, generated header, etc.)
 
 ## Usage
 
@@ -38,7 +38,7 @@ bump /path/to/modc
 ## What it does
 
 1. Computes the next `YY.MM.R` (or uses the version you pass)
-2. Writes `VERSION` (and patches `MODC_VERSION` when present)
+2. Writes `VERSION`
 3. Commits, annotated-tags, pushes
 4. `gh release create --generate-notes`
 5. `brew bump-formula-pr` against the tap, then merges the PR
