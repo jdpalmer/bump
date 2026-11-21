@@ -5,12 +5,12 @@ Cut a `YY.MM.R` release and update [`jdpalmer/tap`](https://github.com/jdpalmer/
 ## Install
 
 ```bash
-git clone https://github.com/jdpalmer/bump.git ~/src/bump
+git clone https://github.com/jdpalmer/bump.git
 mkdir -p ~/bin
-ln -sf ~/src/bump/bump.sh ~/bin/bump
+ln -sf "$PWD/bump/bump.sh" ~/bin/bump   # adjust if you cloned elsewhere
 ```
 
-Keep project checkouts as siblings of `bump/` (e.g. `~/src/transmute`).
+Keep project checkouts as siblings of the `bump/` repo.
 
 ## Prerequisites
 
@@ -27,7 +27,7 @@ Keep project checkouts as siblings of `bump/` (e.g. `~/src/transmute`).
 ## Usage
 
 ```bash
-bump transmute              # ../transmute next to this repo
+bump transmute              # sibling ../transmute next to this repo
 bump jem 26.11.1
 bump --dry-run .
 bump /path/to/modc
