@@ -6,17 +6,12 @@ usage() {
 	cat <<'EOF'
 Usage: bump.sh [--dry-run] <project|.|path> [version]
 
-  bump.sh transmute           # $BUMP_SRC/transmute
-  bump.sh .                   # current repo
-  bump.sh jem 26.11.1         # explicit version
+  bump.sh transmute         # sibling ../transmute (next to this repo)
+  bump.sh .                 # current directory
+  bump.sh jem 26.11.1
   bump.sh --dry-run modc
 
-Convention: repo root has VERSION; formula is jdpalmer/tap/<basename>.
-Projects embed VERSION themselves (Make/#embed); bump only writes the file.
-
-Environment:
-  BUMP_SRC   Parent of named checkouts (default: parent of this repo)
-  BUMP_TAP   Homebrew tap (default: jdpalmer/tap)
+Writes VERSION, tags, gh release --generate-notes, brew bump-formula-pr.
 EOF
 	exit 2
 }
@@ -49,19 +44,14 @@ done
 [[ -n "$TARGET" ]] || usage
 
 SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
-BUMP_SRC=${BUMP_SRC:-$(cd "$SCRIPT_DIR/.." && pwd)}
-BUMP_TAP=${BUMP_TAP:-jdpalmer/tap}
+TAP=jdpalmer/tap
 
-need() {
-	command -v "$1" >/dev/null 2>&1 || {
-		echo "error: required command not found: $1" >&2
+for c in git gh brew; do
+	command -v "$c" >/dev/null || {
+		echo "error: required command not found: $c" >&2
 		exit 1
 	}
-}
-
-need git
-need gh
-need brew
+done
 
 run() {
 	if [[ $DRY_RUN -eq 1 ]]; then
@@ -73,43 +63,17 @@ run() {
 	fi
 }
 
-# Resolve repo path: absolute/relative path, ".", or sibling name under BUMP_SRC
-if [[ "$TARGET" == "." ]]; then
-	REPO=$(pwd)
-elif [[ "$TARGET" == /* || "$TARGET" == ../* || "$TARGET" == ./* ]]; then
+# ., path with .git, or sibling of this repo
+if [[ -d "$TARGET/.git" ]]; then
 	REPO=$(cd "$TARGET" && pwd)
-elif [[ -d "$TARGET/.git" ]]; then
-	REPO=$(cd "$TARGET" && pwd)
+elif [[ -d "$SCRIPT_DIR/../$TARGET/.git" ]]; then
+	REPO=$(cd "$SCRIPT_DIR/../$TARGET" && pwd)
 else
-	REPO=$BUMP_SRC/$TARGET
-fi
-
-if [[ ! -d "$REPO/.git" ]]; then
-	echo "error: git repo not found: $REPO" >&2
+	echo "error: git repo not found: $TARGET" >&2
 	exit 1
 fi
 
 NAME=$(basename "$REPO")
-FORMULA=$NAME
-
-default_branch() {
-	local ref
-	ref=$(git -C "$REPO" symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)
-	if [[ -n "$ref" ]]; then
-		echo "${ref##*/}"
-		return
-	fi
-	if git -C "$REPO" show-ref --verify --quiet refs/remotes/origin/main; then
-		echo main
-	elif git -C "$REPO" show-ref --verify --quiet refs/remotes/origin/master; then
-		echo master
-	else
-		echo "error: cannot determine default branch for $REPO" >&2
-		exit 1
-	fi
-}
-
-BRANCH=$(default_branch)
 
 is_yymm_r() {
 	[[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
@@ -118,8 +82,7 @@ is_yymm_r() {
 next_version() {
 	local yy mm prefix latest r file_ver
 	yy=$(date +%y)
-	mm=$(date +%m)
-	mm=$((10#$mm))
+	mm=$((10#$(date +%m)))
 	prefix="${yy}.${mm}."
 
 	latest=$(
@@ -153,13 +116,20 @@ else
 	VER=$(next_version)
 fi
 
-echo "==> $NAME → $VER (formula $BUMP_TAP/$FORMULA)"
+echo "==> $NAME → $VER (formula $TAP/$NAME)"
 [[ $DRY_RUN -eq 1 ]] && echo "(dry-run)"
 
 cd "$REPO"
-cur_branch=$(git rev-parse --abbrev-ref HEAD)
-if [[ "$cur_branch" != "$BRANCH" ]]; then
-	echo "error: expected branch '$BRANCH', on '$cur_branch'" >&2
+
+ref=$(git symbolic-ref --quiet refs/remotes/origin/HEAD 2>/dev/null || true)
+BRANCH=${ref##*/}
+if [[ -z "$BRANCH" ]]; then
+	echo "error: set origin/HEAD (git remote set-head origin -a)" >&2
+	exit 1
+fi
+cur=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$cur" != "$BRANCH" ]]; then
+	echo "error: expected branch '$BRANCH', on '$cur'" >&2
 	exit 1
 fi
 if [[ $DRY_RUN -eq 0 ]]; then
@@ -188,7 +158,7 @@ run git push origin HEAD "$VER"
 
 if [[ $DRY_RUN -eq 1 ]]; then
 	echo "+ gh release create $VER --title $VER --generate-notes"
-	echo "+ brew bump-formula-pr --no-browse --no-fork --version=$VER $BUMP_TAP/$FORMULA"
+	echo "+ brew bump-formula-pr --no-browse --no-fork --version=$VER $TAP/$NAME"
 	echo "+ gh pr merge --merge <tap-pr>"
 	echo "==> dry-run complete for $NAME $VER"
 	exit 0
@@ -196,8 +166,8 @@ fi
 
 gh release create "$VER" --title "$VER" --generate-notes
 
-echo "==> updating $BUMP_TAP/$FORMULA"
-pr_out=$(brew bump-formula-pr --no-browse --no-fork --version="$VER" "$BUMP_TAP/$FORMULA" 2>&1) || {
+echo "==> updating $TAP/$NAME"
+pr_out=$(brew bump-formula-pr --no-browse --no-fork --version="$VER" "$TAP/$NAME" 2>&1) || {
 	echo "$pr_out" >&2
 	echo "error: brew bump-formula-pr failed" >&2
 	exit 1
