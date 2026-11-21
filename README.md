@@ -39,5 +39,14 @@ bump /path/to/modc
 1. Next `YY.MM.R` (or the version you pass)
 2. Write `VERSION`
 3. Commit, tag, push
-4. `gh release create --generate-notes`
+4. Create a GitHub release whose notes are `git log` subjects since the previous `YY.MM.R` tag (plus a compare link)
 5. `brew bump-formula-pr` + merge the PR
+
+## Pull requests
+
+External contributions use the normal GitHub flow; release cutting stays the same:
+
+1. Review and merge the PR to the default branch (`gh pr merge` or the UI).
+2. When you want to ship (that PR alone or a batch of commits): run `bump <project>` as usual.
+
+Release notes list commit subjects in the tag range, so merges and direct pushes both show up. You do not need to change how you bump for the occasional PR.

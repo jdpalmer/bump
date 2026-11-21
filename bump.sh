@@ -11,7 +11,7 @@ Usage: bump.sh [--dry-run] <project|.|path> [version]
   bump.sh jem 26.11.1
   bump.sh --dry-run modc
 
-Writes VERSION, tags, gh release --generate-notes, brew bump-formula-pr.
+Writes VERSION, tags, gh release (notes from git log), brew bump-formula-pr.
 EOF
 	exit 2
 }
@@ -79,6 +79,13 @@ is_yymm_r() {
 	[[ "$1" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
 }
 
+latest_yymm_r_tag() {
+	git -C "$REPO" tag -l \
+		| grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+		| sort -t. -k1,1n -k2,2n -k3,3n \
+		| tail -1 || true
+}
+
 next_version() {
 	local yy mm prefix latest r file_ver
 	yy=$(date +%y)
@@ -104,6 +111,32 @@ next_version() {
 	else
 		echo "${yy}.${mm}.0"
 	fi
+}
+
+# Notes from commits since the previous release tag (before the bump commit).
+release_notes() {
+	local prev=$1 ver=$2 slug=$3
+	local bullets
+	if [[ -n "$prev" ]]; then
+		bullets=$(git log --pretty=format:'* %s' "$prev..HEAD")
+	else
+		bullets=$(git log --pretty=format:'* %s' -20)
+	fi
+	{
+		echo "## What's Changed"
+		echo
+		if [[ -n "$bullets" ]]; then
+			printf '%s\n' "$bullets"
+		else
+			echo "* No commits since the previous release."
+		fi
+		echo
+		if [[ -n "$prev" ]]; then
+			echo "**Full Changelog**: https://github.com/${slug}/compare/${prev}...${ver}"
+		else
+			echo "**Full Changelog**: https://github.com/${slug}/commits/${ver}"
+		fi
+	}
 }
 
 if [[ -n "$VERSION_ARG" ]]; then
@@ -145,8 +178,14 @@ fi
 
 run git pull --ff-only
 
+PREV=$(latest_yymm_r_tag)
+SLUG=$(gh repo view --json nameWithOwner -q .nameWithOwner)
+NOTES=$(release_notes "$PREV" "$VER" "$SLUG")
+
 if [[ $DRY_RUN -eq 1 ]]; then
 	echo "+ write VERSION → $VER"
+	echo "+ release notes:"
+	printf '%s\n' "$NOTES" | sed 's/^/  /'
 else
 	printf '%s\n' "$VER" >VERSION
 fi
@@ -157,14 +196,17 @@ run git tag -a "$VER" -m "$VER"
 run git push origin HEAD "$VER"
 
 if [[ $DRY_RUN -eq 1 ]]; then
-	echo "+ gh release create $VER --title $VER --generate-notes"
+	echo "+ gh release create $VER --title $VER --notes-file …"
 	echo "+ brew bump-formula-pr --no-browse --no-fork --version=$VER $TAP/$NAME"
 	echo "+ gh pr merge --merge <tap-pr>"
 	echo "==> dry-run complete for $NAME $VER"
 	exit 0
 fi
 
-gh release create "$VER" --title "$VER" --generate-notes
+notes_file=$(mktemp)
+printf '%s\n' "$NOTES" >"$notes_file"
+gh release create "$VER" --title "$VER" --notes-file "$notes_file"
+rm -f "$notes_file"
 
 echo "==> updating $TAP/$NAME"
 pr_out=$(brew bump-formula-pr --no-browse --no-fork --version="$VER" "$TAP/$NAME" 2>&1) || {
