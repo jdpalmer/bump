@@ -6,11 +6,12 @@ Cut a `YY.MM.R` release and update [`jdpalmer/tap`](https://github.com/jdpalmer/
 
 ```bash
 git clone https://github.com/jdpalmer/bump.git
+cd bump
 mkdir -p ~/bin
-ln -sf "$PWD/bump/bump.sh" ~/bin/bump   # adjust if you cloned elsewhere
+ln -sf "$PWD/bump.sh" ~/bin/bump
 ```
 
-Keep project checkouts as siblings of the `bump/` repo.
+Keep project checkouts as siblings of this repo.
 
 ## Prerequisites
 
